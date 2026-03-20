@@ -27,56 +27,27 @@
 
 const admin = require('firebase-admin');
 const { checkRateLimit } = require('./rateLimiter');
+const { saveNotification } = require('./notificationService');
 
-const GROWTH_STAGE_WEIGHTS = {    // 1 - Plant can compensate, tillers regrow; 1.5 - Panicle initiation — damage starts affecting yield directly; 2 - Pollination stage — any damage = direct yield loss, no recovery
-    
+const GROWTH_STAGE_WEIGHTS = {
     rice: {
-        'seedling': 1,
-        'vegetative': 1,
-        'reproductive': 1.5,
-        'flowering': 2,
-        'maturation': 1.3,
+        'seedling': 1, 'vegetative': 1, 'reproductive': 1.5, 'flowering': 2, 'maturation': 1.3,
     },
-
     corn: {
-        'seedling': 1,
-        'vegetative': 1,
-        'reproductive': 1.5,
-        'flowering': 2,
-        'maturation': 1.3,
+        'seedling': 1, 'vegetative': 1, 'reproductive': 1.5, 'flowering': 2, 'maturation': 1.3,
     },
-
     coconut: {
-        'seedling': 1,
-        'vegetative': 1,
-        'flowering': 1.5,      
-        'nut formation': 2, 
-        'maturation': 1.3,
+        'seedling': 1, 'vegetative': 1, 'flowering': 1.5, 'nut formation': 2, 'maturation': 1.3,
     }
-    
 };
 
-const SEVERITY_WEIGHTS = {
-    'mild': 1,
-    'moderate': 2,
-    'severe': 3,
-}
-
-const OUTBREAK_SCORE_THRESHOLD = 4; // tune this against IRRI data
-const MIN_UNIQUE_USERS = 3; // minimum farmers before alert, prevents 1 farmer gaming score
+const SEVERITY_WEIGHTS = { 'mild': 1, 'moderate': 2, 'severe': 3 };
+const OUTBREAK_SCORE_THRESHOLD = 4;
+const MIN_UNIQUE_USERS = 3;
 const WINDOW_DAYS = 14;
-
-
 const VALID_SEVERITY = ['mild', 'moderate', 'severe'];
-const VALID_STAGES = ['seedling', 'vegetative', 'reproductive', 'flowering', 'maturation'];
+const VALID_STAGES = ['seedling', 'vegetative', 'reproductive', 'flowering', 'maturation', 'nut formation'];
 
-
-if (!VALID_SEVERITY.includes(severity) || !VALID_STAGES.includes(growthStage)) {
-    console.warn('Invalid field values, skipping.');
-    return;
-}
-
-    
 const detectOutbreak = async (scan) => {
     const db = admin.firestore();
     const { pest, barangay, cropName, growthStage, severity, userId } = scan.data();
@@ -85,9 +56,16 @@ const detectOutbreak = async (scan) => {
         console.warn('Missing required fields in scan, skipping outbreak detection.');
         return;
     }
-    
+
+    // validation inside function
+    if (!VALID_SEVERITY.includes(severity) || !VALID_STAGES.includes(growthStage)) {
+        console.warn('Invalid field values, skipping.');
+        return;
+    }
+
     const allowed = await checkRateLimit(userId);
     if (!allowed) return;
+
     const windowStart = new Date();
     windowStart.setDate(windowStart.getDate() - WINDOW_DAYS);
 
@@ -103,8 +81,8 @@ const detectOutbreak = async (scan) => {
 
     snapshot.forEach(doc => {
         const data = doc.data();
-
-        const stageWeight = GROWTH_STAGE_WEIGHTS[data.growthStage?.toLowerCase()] ?? 1;
+        // fixed crop-specific weight lookup
+        const stageWeight = GROWTH_STAGE_WEIGHTS[data.cropName?.toLowerCase()]?.[data.growthStage?.toLowerCase()] ?? 1;
         const severityWeight = SEVERITY_WEIGHTS[data.severity?.toLowerCase()] ?? 1;
         const impactScore = stageWeight * severityWeight;
 
@@ -112,14 +90,10 @@ const detectOutbreak = async (scan) => {
         totalScore += impactScore;
     });
 
-    // Normalize score by unique users to prevent single-farm inflation
     const normalizedScore = uniqueUsers.size > 0 ? totalScore / uniqueUsers.size : 0;
-
     console.log(`Barangay: ${barangay} | Pest: ${pest} | Users: ${uniqueUsers.size} | Score: ${normalizedScore}`);
 
-    const shouldAlert =
-        uniqueUsers.size >= MIN_UNIQUE_USERS &&
-        normalizedScore >= OUTBREAK_SCORE_THRESHOLD;
+    const shouldAlert = uniqueUsers.size >= MIN_UNIQUE_USERS && normalizedScore >= OUTBREAK_SCORE_THRESHOLD;
 
     if (shouldAlert) {
         await triggerOutbreakAlert({ db, pest, barangay, cropName, normalizedScore, uniqueUsers });
@@ -128,19 +102,13 @@ const detectOutbreak = async (scan) => {
     }
 };
 
-
 const triggerOutbreakAlert = async ({ db, pest, barangay, cropName, normalizedScore, uniqueUsers }) => {
     const outbreakRef = db.collection('outbreaks').doc(`${barangay}_${pest}`);
     const existing = await outbreakRef.get();
-
-    // Avoid spamming notifications if outbreak is already active
     const alreadyActive = existing.exists && existing.data().status === 'ACTIVE';
-    const  { saveNotification } = require('./notifiactionService');
-    
+
     await outbreakRef.set({
-        pest,
-        barangay,
-        cropName,
+        pest, barangay, cropName,
         status: 'ACTIVE',
         normalizedScore,
         affectedUserCount: uniqueUsers.size,
@@ -148,51 +116,42 @@ const triggerOutbreakAlert = async ({ db, pest, barangay, cropName, normalizedSc
         ...(alreadyActive ? {} : { detectedAt: new Date() })
     }, { merge: true });
 
+    if (!alreadyActive) {
+        await admin.messaging().sendToTopic(barangay, {
+            notification: {
+                title: '⚠️ Pest Outbreak Alert',
+                body: `${pest} outbreak detected on ${cropName} in your barangay. Check the app for recommendations.`
+            },
+            data: { pest, barangay, cropName, type: 'OUTBREAK_ALERT' }
+        });
 
-        if (!alreadyActive) {
-            await admin.messaging().sendToTopic(barangay, {
-                notification: {
-                    title: '⚠️ Pest Outbreak Alert',
-                    body: `${pest} outbreak detected on ${cropName} in your barangay. Check the app for recommendations.`
-                },
-                data: {
-                    pest,
-                    barangay,
-                    cropName,
-                    type: 'OUTBREAK_ALERT'
-                }
-            });
+        const message = `${pest} outbreak detected on ${cropName} in your barangay. Check the app for recommendations.`;
+        const farmerSnapshot = await db.collection('users').where('barangay', '==', barangay).get();
 
-            const message =  `${pest} outbreak detected on ${cropName} in your barangay. Check the app for recommendations.`
-            const farmerSnapshot = await db.collection('users').where('barangay', '==', barangay).get();
+        const savePromises = [];
+        farmerSnapshot.forEach(doc => {
+            savePromises.push(saveNotification({ userId: doc.id, pest, cropName, barangay, message }));
+        });
 
-            const savePromises = [];
-            farmerSnapshot.forEach(doc => {
-                savePromises.push(saveNotification({
-                    userId: doc.id,
-                    pest,
-                    cropName,
-                    barangay,
-                    message,
-                }));
-            });
+        await Promise.all(savePromises);
+        console.log(`Outbreak alert sent for ${pest} in ${barangay}`);
 
-            await Promise.all(savePromises)
-            console.log(`Outbreak alert sent for ${pest} in ${barangay}`);
-        }
+        farmerSnapshot.forEach(doc => {
+            const { phoneNumber } = doc.data();
+            if (phoneNumber) {
+                sendSMS(phoneNumber, message);
+            }
+        });
+
+    }
 };
 
-
-// Auto-resolve outbreak if reports drop off
 const resolveOutbreakIfExists = async ({ db, pest, barangay }) => {
     const outbreakRef = db.collection('outbreaks').doc(`${barangay}_${pest}`);
     const existing = await outbreakRef.get();
 
     if (existing.exists && existing.data().status === 'ACTIVE') {
-        await outbreakRef.update({
-            status: 'RESOLVED',
-            resolvedAt: new Date()
-        });
+        await outbreakRef.update({ status: 'RESOLVED', resolvedAt: new Date() });
         console.log(`Outbreak for ${pest} in ${barangay} auto-resolved.`);
     }
 };
