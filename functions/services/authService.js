@@ -16,20 +16,23 @@
 
 
 const admin = require('firebase-admin');
-const { onDocumentCreated } = require('firebase-functions/v2/firestore');
 
 const onUserCreated = async (user) => {
-    const db = admin.firestore();
-    const { uid, phoneNumber, displayName } = user;
+    try {
+        const db = admin.firestore();
+        const { uid, phoneNumber, displayName } = user;
 
-    await db.collection('users').doc(uid).set({
-        name: displayName ?? 'Farmer',
-        phoneNumber: phoneNumber ?? null,
-        barangay: null,    
-        createdAt: new Date()
-    });
+        await db.collection('users').doc(uid).set({
+            name: displayName ?? 'Farmer',
+            phoneNumber: phoneNumber ?? null,
+            barangay: null,
+            createdAt: new Date()
+        });
 
-    console.log(`User document created for ${uid}`);
+        console.log(`User document created for ${uid}`);
+    } catch (error) {
+        console.error('Failed to create user document:', error.message);
+    }
 };
 
 module.exports = { onUserCreated };

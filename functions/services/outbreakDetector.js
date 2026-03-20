@@ -67,6 +67,15 @@ const MIN_UNIQUE_USERS = 3; // minimum farmers before alert, prevents 1 farmer g
 const WINDOW_DAYS = 14;
 
 
+const VALID_SEVERITY = ['mild', 'moderate', 'severe'];
+const VALID_STAGES = ['seedling', 'vegetative', 'reproductive', 'flowering', 'maturation'];
+
+
+if (!VALID_SEVERITY.includes(severity) || !VALID_STAGES.includes(growthStage)) {
+    console.warn('Invalid field values, skipping.');
+    return;
+}
+
     
 const detectOutbreak = async (scan) => {
     const db = admin.firestore();
