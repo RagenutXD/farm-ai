@@ -28,6 +28,7 @@
 const admin = require('firebase-admin');
 const { checkRateLimit } = require('./rateLimiter');
 const { saveNotification } = require('./notificationService');
+const { sendSMS } = require('./smsService');
 
 const GROWTH_STAGE_WEIGHTS = {
     rice: {
