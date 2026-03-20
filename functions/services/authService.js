@@ -9,7 +9,6 @@
  * {
  *   name: string
  *   phoneNumber: string
- *   barangay: string    ← update this after onboarding
  *   createdAt: Timestamp
  * }
  */
@@ -25,7 +24,6 @@ const onUserCreated = async (user) => {
         await db.collection('users').doc(uid).set({
             name: displayName ?? 'Farmer',
             phoneNumber: phoneNumber ?? null,
-            barangay: null,
             createdAt: new Date()
         });
 
