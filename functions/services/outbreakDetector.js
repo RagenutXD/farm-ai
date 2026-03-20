@@ -119,7 +119,7 @@ const triggerOutbreakAlert = async ({ db, pest, barangay, cropName, normalizedSc
     if (!alreadyActive) {
         await admin.messaging().sendToTopic(barangay, {
             notification: {
-                title: '⚠️ Pest Outbreak Alert',
+                title: 'Pest Outbreak Alert!',
                 body: `${pest} outbreak detected on ${cropName} in your barangay. Check the app for recommendations.`
             },
             data: { pest, barangay, cropName, type: 'OUTBREAK_ALERT' }
