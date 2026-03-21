@@ -29,7 +29,6 @@ export function useModel() {
   const [session, setSession] = useState<InferenceSession | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // 🔹 Load model
   useEffect(() => {
     const loadModel = async () => {
       try {
@@ -50,7 +49,6 @@ export function useModel() {
     loadModel();
   }, []);
 
-  // 🔹 Preprocess (YOLO-style)
   const preprocess = async (uri: string) => {
     const img = await ImageManipulator.manipulateAsync(
       uri,
@@ -73,7 +71,7 @@ export function useModel() {
     const floatData = new Float32Array(1 * 3 * width * height);
     const size = width * height;
 
-    // ✅ YOLO normalization (just /255)
+    // normalization thing
     for (let i = 0; i < size; i++) {
       const r = data[i * 4] / 255;
       const g = data[i * 4 + 1] / 255;
@@ -87,49 +85,68 @@ export function useModel() {
     return floatData;
   };
 
-  const parseClassifier = (output: any) => {
-  const key = Object.keys(output)[0];
-  const data = output[key].data as Float32Array;
+    const parseClassifierWithCrop = (
+    output: any,
+    selectedCrop: 'Rice' | 'Corn' | 'Potato' | 'Wheat'
+  ) => {
+    const key = Object.keys(output)[0];
+    const data = output[key].data as Float32Array;
 
-  let maxIdx = 0;
-  for (let i = 1; i < data.length; i++) {
-    if (data[i] > data[maxIdx]) {
-      maxIdx = i;
+    let maxIdx = 0;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i] > data[maxIdx]) maxIdx = i;
     }
-  }
 
-  return {
-    label: CLASS_MAP[maxIdx],
-    confidence: data[maxIdx],
+    if (CLASS_MAP[maxIdx] === 'Invalid') {
+      return {
+        label: 'Invalid',
+        confidence: data[maxIdx],
+      };
+    }
+
+    // Step 2: Filter classes by selected crop
+    const cropClasses: { index: number; score: number }[] = [];
+
+    data.forEach((score, idx) => {
+      if (CLASS_MAP[idx].startsWith(selectedCrop)) {
+        cropClasses.push({ index: idx, score });
+      }
+    });
+
+    // Step 3: Pick the highest among the filtered crop classes
+    if (cropClasses.length === 0) {
+      return {
+        label: 'Invalid',
+        confidence: 0,
+      };
+    }
+
+    cropClasses.sort((a, b) => b.score - a.score);
+    const best = cropClasses[0];
+
+    return {
+      label: CLASS_MAP[best.index],
+      confidence: best.score,
+    };
   };
-};
 
-
-  // 🔹 Run inference
-  const runInference = async (imageUri: string) => {
+  const runInference = async (imageUri: string, cropType: 'Rice' | 'Corn' | 'Potato' | 'Wheat') => {
     if (!session) throw new Error('Model not loaded');
 
     setLoading(true);
-
     try {
       const inputData = await preprocess(imageUri);
 
-      const tensor = new Tensor('float32', inputData, [
-        1,
-        3,
-        INPUT_SIZE,
-        INPUT_SIZE,
-      ]);
-
+      const tensor = new Tensor('float32', inputData, [1, 3, INPUT_SIZE, INPUT_SIZE]);
       const feeds: Record<string, Tensor> = {};
       feeds[session.inputNames[0]] = tensor;
 
       const output = await session.run(feeds);
-      const prediction = parseClassifier(output);  // 👈 replace parseYOLO
+
+      // Use new parser with crop filtering
+      const prediction = parseClassifierWithCrop(output, cropType);
+
       return prediction;
-    } catch (e) {
-      console.error('Inference error:', e);
-      throw e;
     } finally {
       setLoading(false);
     }
