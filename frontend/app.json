@@ -51,8 +51,9 @@
           "cameraPermission": "Allow $(BUNDLE_IDENTIFIER) to access your camera."
         }
       ],
-      "onnxruntime-react-native"
+      "expo-asset"
     ],
+    "assetBundlePatterns": ["assets/**"],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
